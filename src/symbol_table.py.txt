@@ -1,0 +1,63 @@
+# src/symbol_table.py
+from typing import Dict, Optional, List
+
+
+class SymbolInfo:
+    def __init__(self, name: str, typ: str, info: dict = None):
+        self.name = name
+        self.typ = typ
+        self.info = info or {}
+
+    def __repr__(self):
+        return f"Symbol(name={self.name}, type={self.typ}, info={self.info})"
+
+
+class SymbolTable:
+    """
+    A simple symbol table with scope support (stack of dicts).
+    Methods:
+      - enter_scope(): push a new scope
+      - exit_scope(): pop scope
+      - declare(name, type): declare variable in current scope
+      - lookup(name): lookup symbol in nested scopes (inner -> outer)
+    """
+
+    def __init__(self):
+        self.scopes: List[Dict[str, SymbolInfo]] = [{}]
+
+    def enter_scope(self):
+        self.scopes.append({})
+        # print("Entered scope, depth=", len(self.scopes))
+
+    def exit_scope(self):
+        if len(self.scopes) == 1:
+            raise RuntimeError("Attempt to pop global scope")
+        self.scopes.pop()
+        # print("Exited scope, depth=", len(self.scopes))
+
+    def declare(self, name: str, typ: str) -> SymbolInfo:
+        scope = self.scopes[-1]
+        if name in scope:
+            raise RuntimeError(f"Symbol '{name}' already declared in current scope")
+        info = SymbolInfo(name, typ)
+        scope[name] = info
+        return info
+
+    def assign(self, name: str, typ: Optional[str] = None) -> SymbolInfo:
+        sym = self.lookup(name)
+        if sym is None:
+            # implicitly declare in current scope if not found
+            return self.declare(name, typ or "unknown")
+        if typ and sym.typ == "unknown":
+            sym.typ = typ
+        return sym
+
+    def lookup(self, name: str) -> Optional[SymbolInfo]:
+        for scope in reversed(self.scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def __repr__(self):
+        return f"SymbolTable(scopes={self.scopes})"
+

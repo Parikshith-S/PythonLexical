@@ -1,0 +1,140 @@
+# src/ast_nodes.py
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Optional, Any
+
+
+@dataclass
+class Node:
+    """Base AST node."""
+    pass
+
+
+# ---------- Expressions ----------
+@dataclass
+class Expr(Node):
+    pass
+
+
+@dataclass
+class NumberLiteral(Expr):
+    value: Any  # int or float
+    raw: str
+
+    def __repr__(self):
+        return f"Number({self.raw})"
+
+
+@dataclass
+class CharLiteral(Expr):
+    value: str
+
+    def __repr__(self):
+        return f"Char('{self.value}')"
+
+
+@dataclass
+class BoolLiteral(Expr):
+    value: bool
+
+    def __repr__(self):
+        return f"Bool({self.value})"
+
+
+@dataclass
+class Identifier(Expr):
+    name: str
+
+    def __repr__(self):
+        return f"Id({self.name})"
+
+
+@dataclass
+class UnaryOp(Expr):
+    op: str
+    operand: Expr
+
+    def __repr__(self):
+        return f"Unary({self.op} {self.operand})"
+
+
+@dataclass
+class BinaryOp(Expr):
+    op: str
+    left: Expr
+    right: Expr
+
+    def __repr__(self):
+        return f"Binary({self.left} {self.op} {self.right})"
+
+
+# ---------- Statements ----------
+@dataclass
+class Stmt(Node):
+    pass
+
+
+@dataclass
+class ExprStmt(Stmt):
+    expr: Expr
+
+    def __repr__(self):
+        return f"ExprStmt({self.expr})"
+
+
+@dataclass
+class VarDecl(Stmt):
+    typ: str  # 'int', 'double', ...
+    name: str
+    initializer: Optional[Expr] = None
+
+    def __repr__(self):
+        return f"VarDecl({self.typ} {self.name} = {self.initializer})"
+
+
+@dataclass
+class Assign(Stmt):
+    target: Identifier
+    op: str  # '=', '+=', '-=', ...
+    value: Expr
+
+    def __repr__(self):
+        return f"Assign({self.target.name} {self.op} {self.value})"
+
+
+@dataclass
+class IfStmt(Stmt):
+    cond: Expr
+    then_branch: List[Stmt]
+    else_branch: Optional[List[Stmt]] = None
+
+    def __repr__(self):
+        return f"If({self.cond}, then={self.then_branch}, else={self.else_branch})"
+
+
+@dataclass
+class Block(Stmt):
+    statements: List[Stmt]
+
+    def __repr__(self):
+        return f"Block({self.statements})"
+
+
+@dataclass
+class FunDecl(Stmt):
+    name: str
+    param_name: Optional[str]
+    param_type: Optional[str]
+    body: Expr  # For simplicity function body is a single expression (like original spec)
+
+    def __repr__(self):
+        return f"Fun({self.name}({self.param_type} {self.param_name}) = {self.body})"
+
+
+# ---------- Top-level Program ----------
+@dataclass
+class Program(Node):
+    statements: List[Stmt]
+
+    def __repr__(self):
+        return f"Program({self.statements})"

@@ -1,0 +1,132 @@
+# src/pattern_matcher.py
+
+"""
+Pattern Matcher Module
+----------------------
+Author: J
+Purpose: Implements regex-based pattern matching for tokens, string literal handling,
+         comment recognition, and error detection in the lexical analyzer.
+"""
+
+import re
+from typing import Optional
+from src.token_definitions import Token, TokenType
+
+
+class PatternMatcher:
+    """
+    Handles regex-based token matching, string/comment detection,
+    and error handling for the lexical analyzer.
+    """
+
+    def __init__(self):
+        # Define regex patterns for different token types
+        self.patterns = {
+            TokenType.KEYWORD: re.compile(r'\b(?:if|else|for|while|def|return|class|True|False|None)\b'),
+            TokenType.IDENTIFIER: re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b'),
+            TokenType.INTEGER: re.compile(r'\b\d+\b'),
+            TokenType.FLOAT: re.compile(r'\b\d+\.\d+\b'),
+            TokenType.OPERATOR: re.compile(r'==|!=|<=|>=|\+|-|\*|/|=|<|>'),
+            TokenType.STRING: re.compile(r'(\".*?\"|\'.*?\')'),
+            TokenType.SEPARATOR: re.compile(r'[()\[\]{},;:]'),
+            TokenType.WHITESPACE: re.compile(r'\s+'),
+            # Comments handled separately below
+        }
+
+        # Comment patterns
+        self.single_line_comment = re.compile(r'#.*')
+        self.multi_line_comment = re.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')')
+
+    # ----------------------------------------------------------
+    # Core Matching
+    # ----------------------------------------------------------
+    def match_token(self, text: str, position: int, line: int, column: int) -> Optional[Token]:
+        """
+        Attempts to match the next token at the given position in the text.
+
+        Args:
+            text: Full source code string.
+            position: Current position in text.
+            line: Current line number.
+            column: Current column number.
+
+        Returns:
+            Token object if match found, None otherwise.
+        """
+
+        remaining = text[position:]
+
+        # Skip whitespace
+        if match := self.patterns[TokenType.WHITESPACE].match(remaining):
+            return None  # whitespace not returned as token
+
+        # Skip comments
+        if self.single_line_comment.match(remaining) or self.multi_line_comment.match(remaining):
+            return None  # comments not tokens
+
+        # Check each token pattern
+        for token_type, pattern in self.patterns.items():
+            match = pattern.match(remaining)
+            if match:
+                value = match.group(0)
+                return Token(type=token_type, value=value, line=line, column=column)
+
+        # Handle invalid or unknown tokens
+        if remaining:
+            invalid_char = remaining[0]
+            raise ValueError(
+                f"Lexical error: Unexpected character '{invalid_char}' "
+                f"at line {line}, column {column}"
+            )
+
+        return None
+
+    # ----------------------------------------------------------
+    # Helper Functions
+    # ----------------------------------------------------------
+
+    def strip_comments(self, text: str) -> str:
+        """
+        Removes all single-line and multi-line comments from the source text.
+        """
+        text = re.sub(self.multi_line_comment, '', text)
+        text = re.sub(self.single_line_comment, '', text)
+        return text
+
+    def validate_string(self, string_literal: str, line: int, column: int) -> Optional[str]:
+        """
+        Validates string literal structure (checks closing quotes, escape characters, etc.)
+        """
+        if not (string_literal.startswith('"') and string_literal.endswith('"')) \
+           and not (string_literal.startswith("'") and string_literal.endswith("'")):
+            raise ValueError(f"Unterminated string at line {line}, column {column}")
+        return string_literal
+
+
+# ----------------------------------------------------------
+# Example usage (for testing during development)
+# ----------------------------------------------------------
+if __name__ == "__main__":
+    matcher = PatternMatcher()
+    code = '''
+    def func():
+        # comment
+        x = "hello"
+        y = 42
+        z = 3.14
+    '''
+    clean = matcher.strip_comments(code)
+    pos = 0
+    line, col = 1, 1
+
+    while pos < len(clean):
+        try:
+            token = matcher.match_token(clean, pos, line, col)
+            if token:
+                print(token)
+                pos += len(token.value)
+            else:
+                pos += 1
+        except ValueError as e:
+            print(e)
+            pos += 1
