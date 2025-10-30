@@ -1,0 +1,194 @@
+# src/codegen.py
+"""
+A simple three-address code generator that walks the AST nodes and emits TAC.
+Instructions are tuples (op, arg1, arg2, result) or string representations for labels/gotos.
+"""
+
+from typing import List, Tuple, Union
+from src.ast_nodes import *
+from src.symbol_table import SymbolTable
+
+Instr = Tuple[str, Union[str, None], Union[str, None], Union[str, None]]
+
+
+class CodeGenerator:
+    def __init__(self):
+        self.instructions: List[Instr] = []
+        self.temp_count = 0
+        self.label_count = 0
+        self.symtab = SymbolTable()
+
+    def new_temp(self) -> str:
+        self.temp_count += 1
+        return f"t{self.temp_count}"
+
+    def new_label(self) -> str:
+        self.label_count += 1
+        return f"L{self.label_count}"
+
+    def emit(self, op: str, a=None, b=None, res=None):
+        self.instructions.append((op, a, b, res))
+
+    def generate(self, program: Program) -> List[Instr]:
+        # top-level: keep global scope
+        for stmt in program.statements:
+            self.gen_stmt(stmt)
+        return self.instructions
+
+    # --------------
+    # Statements
+    # --------------
+    def gen_stmt(self, stmt: Stmt):
+        if isinstance(stmt, VarDecl):
+            # declare in symbol table
+            self.symtab.declare(stmt.name, stmt.typ)
+            if stmt.initializer:
+                val = self.gen_expr(stmt.initializer)
+                self.emit('ASSIGN', val, None, stmt.name)
+        elif isinstance(stmt, Assign):
+            # evaluate RHS
+            val = self.gen_expr(stmt.value)
+            # single op assignment or compound
+            if stmt.op == '=':
+                self.symtab.assign(stmt.target.name)
+                self.emit('ASSIGN', val, None, stmt.target.name)
+            else:
+                # compound assignment like +=
+                op_map = {'+=': 'ADD', '-=': 'SUB', '*=': 'MUL', '/=': 'DIV'}
+                base_op = op_map.get(stmt.op, None)
+                if base_op is None:
+                    raise RuntimeError(f"Unknown assignment op {stmt.op}")
+                # load current value
+                tmp = self.new_temp()
+                self.emit('LOAD', stmt.target.name, None, tmp)
+                res = self.new_temp()
+                self.emit(base_op, tmp, val, res)
+                self.emit('ASSIGN', res, None, stmt.target.name)
+        elif isinstance(stmt, ExprStmt):
+            self.gen_expr(stmt.expr)
+        elif isinstance(stmt, IfStmt):
+            self.gen_if(stmt)
+        elif isinstance(stmt, Block):
+            self.symtab.enter_scope()
+            for s in stmt.statements:
+                self.gen_stmt(s)
+            self.symtab.exit_scope()
+        elif isinstance(stmt, FunDecl):
+            # For simplicity, treat function as declaration; do not handle full function bodies with statements.
+            self.symtab.declare(stmt.name, 'function')
+            # generate code for body expression producing a temp
+            self.symtab.enter_scope()
+            if stmt.param_name:
+                self.symtab.declare(stmt.param_name, stmt.param_type or 'unknown')
+            result_temp = self.gen_expr(stmt.body)
+            # store function return temp as special symbol (could be improved)
+            self.emit('FUN_RET', result_temp, None, stmt.name)
+            self.symtab.exit_scope()
+        else:
+            raise RuntimeError(f"Unhandled statement type: {type(stmt)}")
+
+    def gen_if(self, ifstmt: IfStmt):
+        cond_temp = self.gen_expr(ifstmt.cond)
+        then_label = self.new_label()
+        else_label = self.new_label() if ifstmt.else_branch else None
+        end_label = self.new_label()
+
+        if else_label:
+            # if cond goto then_label else goto else_label
+            self.emit('IF_TRUE_GOTO', cond_temp, None, then_label)
+            self.emit('GOTO', None, None, else_label)
+            self.emit('LABEL', None, None, then_label)
+            # then branch
+            for s in ifstmt.then_branch:
+                self.gen_stmt(s)
+            self.emit('GOTO', None, None, end_label)
+            # else branch
+            self.emit('LABEL', None, None, else_label)
+            for s in ifstmt.else_branch:
+                self.gen_stmt(s)
+            self.emit('LABEL', None, None, end_label)
+        else:
+            self.emit('IF_TRUE_GOTO', cond_temp, None, then_label)
+            self.emit('GOTO', None, None, end_label)
+            self.emit('LABEL', None, None, then_label)
+            for s in ifstmt.then_branch:
+                self.gen_stmt(s)
+            self.emit('LABEL', None, None, end_label)
+
+    # --------------
+    # Expressions
+    # --------------
+    def gen_expr(self, expr: Expr) -> str:
+        if isinstance(expr, NumberLiteral):
+            t = self.new_temp()
+            self.emit('LOAD_CONST', expr.raw, None, t)
+            return t
+        if isinstance(expr, CharLiteral):
+            t = self.new_temp()
+            self.emit('LOAD_CONST', expr.value, None, t)
+            return t
+        if isinstance(expr, BoolLiteral):
+            t = self.new_temp()
+            self.emit('LOAD_CONST', str(expr.value), None, t)
+            return t
+        if isinstance(expr, Identifier):
+            tmp = self.new_temp()
+            # Use LOAD for variable
+            self.emit('LOAD', expr.name, None, tmp)
+            return tmp
+        if isinstance(expr, UnaryOp):
+            val = self.gen_expr(expr.operand)
+            res = self.new_temp()
+            if expr.op == '-':
+                self.emit('NEG', val, None, res)
+            elif expr.op == '!':
+                self.emit('NOT', val, None, res)
+            else:
+                self.emit('UNARY_OP', expr.op, val, res)
+            return res
+        if isinstance(expr, BinaryOp):
+            left = self.gen_expr(expr.left)
+            right = self.gen_expr(expr.right)
+            res = self.new_temp()
+            # map op symbol to TAC op
+            op_map = {
+                '+': 'ADD', '-': 'SUB', '*': 'MUL', '/': 'DIV',
+                '//': 'IDIV', '==': 'EQ', '!=': 'NEQ', '>': 'GT', '<': 'LT',
+                'andalso': 'AND', 'orelse': 'OR'
+            }
+            tac_op = op_map.get(expr.op, None)
+            if tac_op is None:
+                # handle textual operator tokens or fallback
+                tac_op = expr.op.upper()
+            self.emit(tac_op, left, right, res)
+            return res
+
+        raise RuntimeError(f"Unhandled expression node: {expr}")
+
+    # ---------------
+    # Utility to pretty print TAC
+    # ---------------
+    def pretty(self) -> List[str]:
+        lines = []
+        for instr in self.instructions:
+            op, a, b, res = instr
+            if op == 'LABEL':
+                lines.append(f"{res}:")
+            elif op == 'GOTO':
+                lines.append(f"goto {res}")
+            elif op == 'IF_TRUE_GOTO':
+                lines.append(f"if {a} goto {res}")
+            elif op == 'LOAD_CONST':
+                lines.append(f"{res} = const {a}")
+            elif op == 'LOAD':
+                lines.append(f"{res} = {a}")
+            elif op == 'ASSIGN':
+                lines.append(f"{res} = {a}")
+            elif op in ('ADD','SUB','MUL','DIV','IDIV','EQ','NEQ','GT','LT','AND','OR'):
+                lines.append(f"{res} = {a} {op} {b}")
+            elif op == 'FUN_RET':
+                lines.append(f"fun {res} return {a}")
+            else:
+                # generic
+                lines.append(f"{op} {a} {b} -> {res}")
+        return lines
